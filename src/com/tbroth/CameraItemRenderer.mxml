@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mx:HBox 
+	color="black"
+	xmlns:mx="http://www.adobe.com/2006/mxml" 
+	width="100%"
+	verticalAlign="middle">
+	
+	<mx:Script>
+		<![CDATA[
+			import mx.controls.Alert;
+			import mx.core.Application;
+			import mx.events.FlexEvent;
+			import mx.utils.StringUtil;
+			
+			private var app:FileGrouper = Application.application as FileGrouper;
+			
+			override public function set data(value:Object):void
+			{      
+				if(value != null)
+				{
+					super.data = value;
+					
+					if(this.cameraNameInput)
+					{
+						this.cameraNameInput.text = data.cameraName;
+						this.numImagesLabel.text = 'Number of Images: ' + String(data.files.length);
+						this.cameraNumberLabel.text = 'Camera #' + String(app.cameras.getItemIndex(this.data) + 1);
+						this.data.cameraNumber = String(app.cameras.getItemIndex(this.data) + 1);
+						//this.camnumlabel.text = String(data.cameraNumber);
+					}
+				}
+			}
+			
+			private function handleCameraRenamed(event:Event):void
+			{
+				this.data.cameraName = StringUtil.trim(this.cameraNameInput.text);
+				this.cameraNameInput.removeEventListener(FocusEvent.FOCUS_OUT, handleCameraRenamed);
+				this.cameraNameInput.removeEventListener(FlexEvent.ENTER, handleCameraRenamed);
+				app.setFocus();
+				app.camerasList.selectedItem = null;
+			}
+			
+			private function handleCameraNameInputClicked():void
+			{
+				this.cameraNameInput.addEventListener(FocusEvent.FOCUS_OUT, handleCameraRenamed);
+				this.cameraNameInput.addEventListener(FlexEvent.ENTER, handleCameraRenamed);
+			}
+			
+			
+			private function handleRemoveCameraClicked():void
+			{
+				app.foundImages = [];
+				app.exifReader = null;
+				app.cameras.removeItemAt(app.cameras.getItemIndex(this.data));
+			}
+			
+		]]>
+	</mx:Script>
+	
+	<mx:Label id="cameraNumberLabel"/>
+	
+	<mx:TextInput id="cameraNameInput"
+		toolTip="Enter the name of the camera here"
+		click="{this.handleCameraNameInputClicked()}"/>
+	
+	<mx:Label id="numImagesLabel"/>
+	
+	<mx:Label id="offsetLabel"
+		text="----   Camera Offset Seconds:"/>
+	
+	<mx:NumericStepper id="offsetStepper"
+		minimum="-1000"
+		maximum="1000"
+		value="0"
+		maxChars="4"
+		stepSize="1"
+		color="black"
+		change="{this.data.offset = this.offsetStepper.value}"
+		toolTip="Adjust this to equalize the timestamps of your images if one or more cameras fired significantly prior to or after the others"/>
+	
+	<mx:Button id="removeCameraButton"
+		label="Remove"
+		click="{this.handleRemoveCameraClicked()}"/>
+</mx:HBox>

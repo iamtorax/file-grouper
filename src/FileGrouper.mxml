@@ -1,0 +1,799 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mx:WindowedApplication 
+	xmlns:mx="http://www.adobe.com/2006/mxml" 
+	layout="vertical"
+	horizontalAlign="left"
+	height="800"
+	width="1100"
+	color="white"
+	backgroundColor="0x767676">
+
+	<mx:Script>
+		<![CDATA[
+			import com.patrickshyu.ExifReader;
+			import com.tbroth.*;
+			
+			import fox.photo.SimpleExifExtractor;
+			import fox.photo.exif.ifd.IFDValue;
+			import fox.photo.jpeg.Exif;
+			
+			import mx.collections.ArrayCollection;
+			import mx.collections.IViewCursor;
+			import mx.collections.Sort;
+			import mx.collections.SortField;
+			import mx.controls.Alert;
+			import mx.controls.DateField;
+			import mx.controls.Image;
+			import mx.controls.Text;
+			import mx.utils.StringUtil;
+
+			[Bindable]
+			private var numIterations:int;
+			[Bindable]
+			private var imagesText:String = '';
+			[Bindable]
+			public var foundImages:Array;
+			public var exifReader:ExifReader;
+			[Bindable]
+			private var currentFileIndex:int = 0;
+			private var currentCameraObject:CameraDataObject;
+			[Bindable]
+			public var cameras:ArrayCollection = new ArrayCollection();
+			private var allImages:ArrayCollection = new ArrayCollection();
+			private var saveLocation:File = File.desktopDirectory;
+			private var cameraLocation:File = File.desktopDirectory;
+			private var sortedImages:ArrayCollection = new ArrayCollection();
+			private var outputFolders:Array = [];
+			[Bindable]
+			private var camerasListTextString:String = 'Below is a list of selected cameras for this sort.  You can drag and drop them into a different sequence to change the camera number.  You can also edit the camera name(s).';
+			[Bindable]
+			private var outputFolderNamingExplanationText:String = 'Enter a naming convention for your output folders.  Use the %STARTING_NUMBER% tag to start the numbering of your ' +
+				'folders (eg: [folder name]-1000 where 1000 is your starting number).  If no %STARTING_NUMBER% is selected, 1 will be used.';
+			[Bindable]
+			private var imageNamingExplanationText:String = 'Use the following tags to create a naming convention for your images:' +
+				'\n' +
+				'%CAMERA_NAME%' +
+				'\n' +
+				'%CAMERA_NUMBER%' +
+				'\n' +
+				'%YEAR%' +
+				'\n' +
+				'%MONTH%' +
+				'\n' +
+				'%DATE%' +
+				'\n' +
+				'%HOUR%' +
+				'\n' +
+				'%MINUTE%' +
+				'\n' +
+				'%SECOND%' +
+				'\n' +
+				'%STARTING_NUMBER%' +
+				'\r\n' +
+				'(Use %STARTING_NUMBER% to start the numbering of your images (eg: [image name]-1000.jpg where 1000 is your starting number).  If no %STARTING_NUMBER% is selected, 1 will be used.  If no name is used, ' +
+				'the original file name plus a number will be used.)';
+			
+			
+			private function getImages(event:MouseEvent):void
+			{
+				var dir:File = this.cameraLocation;
+				
+				this.progressBar.visible = false;
+				this.foundImages = [];
+				this.numIterations = 0;
+				this.currentFileIndex = 0;
+				this.imagesText = '';
+				this.addCameraButton.enabled = false;
+				dir.addEventListener(Event.SELECT , onSelect);
+				dir.addEventListener(Event.CANCEL, onCancel);
+				dir.browseForDirectory('Please select a directory for camera #' + String(cameras.length + 1));
+			}
+			
+			private function getImagesInMultipleCameras(event:MouseEvent):void
+			{
+				var dir:File = this.cameraLocation;
+				
+				this.progressBar.visible = false;
+				this.foundImages = [];
+				this.numIterations = 0;
+				this.currentFileIndex = 0;
+				this.imagesText = '';
+				this.addCameraButton.enabled = false;
+				dir.addEventListener(Event.SELECT , onMultipleSelect);
+				dir.addEventListener(Event.CANCEL, onCancel);
+				dir.browseForDirectory('Please select a directory that contains cameras');
+			}
+			
+			private function onMultipleSelect(event:Event):void
+			{
+				var selectedDir:File = new File(event.currentTarget.url);
+				var camera:CameraDataObject;
+				
+				this.cameraLocation = selectedDir.parent;
+				
+				for each(var dir:File in selectedDir.getDirectoryListing())
+				{
+					if(dir.exists && dir.isDirectory && !dir.isHidden && !dir.isPackage)
+					{
+						foundImages = [];
+						camera = new CameraDataObject();
+						camera.cameraName = dir.name;
+						
+						// Get a list of all of the images in the selected directory
+						this.buildImageArrayRecursive(dir);
+						camera.files = foundImages;
+						this.cameras.addItem(camera);
+						this.addCameraButton.enabled = true;
+					}
+				}
+			}
+			
+			private function onSelect(event:Event):void
+			{
+				var selectedDir:File = new File(event.currentTarget.url);
+				var camera:CameraDataObject = new CameraDataObject();
+				this.cameraLocation = selectedDir.parent;
+				camera.cameraName = selectedDir.name;
+				
+				// Get a list of all of the images in the selected directory
+				this.buildImageArrayRecursive(selectedDir);
+				camera.files = foundImages;
+				this.cameras.addItem(camera);
+				this.addCameraButton.enabled = true;
+			}
+			
+			private function onCancel(event:Event):void
+			{
+				this.addCameraButton.enabled = true;
+			}
+			
+			private function buildImageArrayRecursive(dir:File):void
+			{
+				try
+				{
+					// Make sure the directory exists, is not a hidden dir, and is an actual directory
+					if(dir.exists && dir.isDirectory && !dir.isHidden && !dir.isPackage)
+					{
+						for each(var file:File in dir.getDirectoryListing())
+						{
+							if(file.exists && !file.isPackage && !file.isHidden)
+							{
+								if(file.isDirectory)
+								{
+									this.buildImageArrayRecursive(file);
+								}
+								else if(!file.isHidden && !file.isDirectory && !file.isPackage && file.extension && (file.extension.toLocaleLowerCase() == "jpg" || file.extension.toLowerCase() == "jpeg"))
+								{
+									this.foundImages.push(file);
+								}
+							}
+						}
+					}
+				}
+				catch(e:Error)
+				{
+					Alert.show('A problem has occurred.  Please close FileGrouper and try again.', 'Uh oh!');
+				}
+				
+				this.numIterations++;
+			}
+			
+			private function getDateTimeOriginal():void
+			{
+				var file:File;
+				var loader:URLLoader = new URLLoader();
+				
+				if(this.currentFileIndex < this.allImages.length)
+				{
+					file = this.allImages.getItemAt(this.currentFileIndex).file as File;
+					loader.dataFormat = URLLoaderDataFormat.BINARY;
+					loader.addEventListener(Event.COMPLETE, handleFileLoadedForExif);
+					loader.load(new URLRequest(file.url));
+				}
+				else
+				{
+					this.handleAllExifDataLoaded();
+				}
+			}
+			
+			private function handleFileLoadedForExif(event:Event):void
+			{
+				try
+				{
+					var result:ByteArray = event.currentTarget.data;
+					var exif:Exif;
+					var tag:IFDValue;
+					var image:ImageDataObject = this.allImages.getItemAt(this.currentFileIndex) as ImageDataObject;
+					
+					exif = SimpleExifExtractor.readExif(result);
+					//tag = exif.findTagById(306); // DateTime
+					//tag = exif.findTagById(36868); // DateTimeDigitized
+					tag = exif.findTagById(36867); // DateTimeOriginal
+					var exifDateString:String = String(tag.value);
+					exifDateString = exifDateString.replace(' ', ':');
+					var dateParts:Array = exifDateString.split(':');
+					var date:Date = new Date(dateParts[0], parseInt(dateParts[1]) - 1, dateParts[2], dateParts[3], dateParts[4], dateParts[5]);
+					
+					image.dateParts = dateParts;
+					image.timeMilliseconds = date.time;
+					image.timeMilliseconds += (1000 * image.offset);
+					//this.imagesText += '\n' + image.file.name + ', ' + image.timeMilliseconds;
+					this.progressBar.setProgress(this.currentFileIndex + 1, this.allImages.length);
+					this.progressBar.label = 'Loading Timestamp Data (' + String(this.currentFileIndex + 1) + ' of ' + this.allImages.length + ')';
+					this.currentFileIndex++;
+					this.getDateTimeOriginal();
+				}
+				catch(e:Error)
+				{
+					this.handleErrors(e);
+				}
+			}
+			
+			private function handleSaveLocationButtonCicked():void
+			{
+				var dir:File = File.desktopDirectory;
+				dir.addEventListener(Event.SELECT, onSaveLocationSelect);
+				dir.browseForDirectory('Please select a location where you want to save your sorted images:');
+			}
+			
+			private function onSaveLocationSelect(event:Event):void
+			{
+				this.saveLocation = new File(event.currentTarget.url);
+				this.selectedSaveLocationPath.text = 'Selected Save Location: ' + this.saveLocation.nativePath;
+			}
+			
+			private function handleStartingNumberClicked(event:Event):void
+			{
+				var input:TextInput = event.currentTarget as TextInput;
+				
+				if(input.text == 'Enter a %STARTING_NUMBER%')
+				{
+					input.text = '';
+				}
+			}
+			
+			private function handleProcessImagesButtonClicked():void
+			{
+				var camera:CameraDataObject;
+				var file:File;
+				var image:ImageDataObject;
+				var outputFolderConvention:String = StringUtil.trim(this.outputFolderNamingConvention.text);
+				var outputImageConvention:String = StringUtil.trim(this.imageNamingConvention.text);
+				var imageStartingNumber:Number = Number(StringUtil.trim(this.imageStartingNumber.text));
+				var useExifDate:Boolean = this.useExifCB.selected;
+				var toleranceMilliseconds:Number = Math.abs(this.intervalStepper.value) * 1000;
+				
+				this.allImages = new ArrayCollection();
+				
+				if(isNaN(imageStartingNumber))
+				{
+					imageStartingNumber = 1;
+				}
+				
+				// Loop through each camera to get all of the image data ready
+				for(var i:int = 0; i < this.cameras.length; i++)
+				{
+					camera = this.cameras.getItemAt(i) as CameraDataObject;
+					
+					for(var j:int = 0; j < camera.files.length; j++)
+					{
+						// Add the camera data to each image
+						file = camera.files[j] as File;
+						image = new ImageDataObject();
+						image.file = file;
+						image.cameraName = camera.cameraName;
+						image.cameraNumber = i + 1;
+						image.offset = camera.offset;
+						
+						if(!this.useExifCB.selected)
+						{
+							image.timeMilliseconds = file.creationDate.time;
+							image.timeMilliseconds += (1000 * image.offset);
+						}
+						
+						camera.images.push(image);
+						// Add each imageDataObject to an array of all images
+						this.allImages.addItem(image);
+					}
+				}
+				
+				// Load the exif data:
+				if(this.useExifCB.selected)
+				{
+					this.progressBar.visible = true;
+					this.getDateTimeOriginal();
+				}
+				else
+				{
+					this.handleAllExifDataLoaded();
+				}
+			}
+			
+			private function handleAllExifDataLoaded():void
+			{
+				// Sort all images by timeMilliseconds so that the first image in the sorted list is the first one that was shot
+				var outputImageConvention:String;// = StringUtil.trim(this.imageNamingConvention.text);
+				var image:ImageDataObject;
+				var sort:Sort = new Sort();
+				var sf:SortField = new SortField('timeMilliseconds');
+				sort.fields = [sf];
+				this.allImages.sort = sort;
+				this.allImages.refresh();
+				
+				for(var i:int = 0; i < this.allImages.length; i++)
+				{
+					// Add the new image file name to each image
+					image = this.allImages.getItemAt(i) as ImageDataObject;
+					
+					outputImageConvention = StringUtil.trim(this.imageNamingConvention.text);
+					
+					if(outputImageConvention == '')
+					{
+						outputImageConvention = image.file.name;
+					}
+					
+					image.outputImageName = outputImageConvention;
+					image.outputImageName = image.outputImageName.replace('%CAMERA_NAME%', image.cameraName);
+					image.outputImageName = image.outputImageName.replace('%CAMERA_NUMBER%', image.cameraNumber);
+					
+					if(this.useExifCB.selected && image.dateParts && image.dateParts.length > 0)
+					{
+						image.outputImageName = image.outputImageName.replace('%YEAR%', String(image.dateParts[0]));
+						image.outputImageName = image.outputImageName.replace('%MONTH%', String(image.dateParts[1]));
+						image.outputImageName = image.outputImageName.replace('%DATE%', String(image.dateParts[2]));
+						image.outputImageName = image.outputImageName.replace('%HOUR%', String(image.dateParts[3]));
+						image.outputImageName = image.outputImageName.replace('%MINUTE%', String(image.dateParts[4]));
+						image.outputImageName = image.outputImageName.replace('%SECOND%', String(image.dateParts[5]));
+					}
+					else
+					{
+						image.outputImageName = image.outputImageName.replace('%YEAR%', image.file.creationDate.fullYear);
+						image.outputImageName = image.outputImageName.replace('%MONTH%', image.file.creationDate.month);
+						image.outputImageName = image.outputImageName.replace('%DATE%', image.file.creationDate.date);
+						image.outputImageName = image.outputImageName.replace('%HOUR%', image.file.creationDate.hours);
+						image.outputImageName = image.outputImageName.replace('%MINUTE%', image.file.creationDate.minutes);
+						image.outputImageName = image.outputImageName.replace('%SECOND%', image.file.creationDate.seconds);
+					}
+				}
+				
+				if(!this.limitResultsCB.selected)
+				{
+					// Group by the interval ONLY
+					this.groupByTimeRecursive(this.allImages.getItemAt(0) as ImageDataObject);
+				}
+				else
+				{
+					// Only add one image from each camera to a group, and make sure each of those images fall within the tolerance
+					this.groupByTimeOneImagePerCameraOnlyRecursive();
+				}
+				
+				// Now that the images are sorted, copy the files into the proper folder structure inside of the destination directory
+				this.saveSortedFiles();
+			}
+			
+			private function groupByTimeOneImagePerCameraOnlyRecursive():void
+			{
+				// Get the first image in the array
+				var camera:CameraDataObject;
+				var image:ImageDataObject;
+				var folder:Array = [];
+				var firstTime:Number;
+				
+				for(var i:int = 0; i < this.cameras.length; i++)
+				{
+					camera = this.cameras.getItemAt(i) as CameraDataObject;
+					
+					for(var j:int = 0; j < camera.images.length; j++)
+					{
+						image = camera.images[j] as ImageDataObject;
+						
+						if(!this.sortedImages.contains(image))
+						{
+							if(folder.length == 0)
+							{
+								// Start a new folder
+								folder.push(image);
+								this.sortedImages.addItem(image);
+								firstTime = image.timeMilliseconds;
+								this.nameFolderAndImage(image, this.outputFolders.length, folder.length - 1);
+								break;
+							}
+							else if(!this.doesFolderContainImageFromCamera(folder, camera))
+							{
+								// Check the image's timestamp
+								if(image.timeMilliseconds < (firstTime + 1000 * this.intervalStepper.value))
+								{
+									folder.push(image);
+									this.sortedImages.addItem(image);
+									this.nameFolderAndImage(image, this.outputFolders.length, folder.length - 1);
+									break;
+								}
+							}
+						}
+					}
+				}
+				
+				if(folder.length > 0)
+				{
+					this.outputFolders.push(folder);
+				}
+				
+				if(this.outputFolders.length < this.allImages.length && this.sortedImages.length < this.allImages.length)
+				{
+					this.groupByTimeOneImagePerCameraOnlyRecursive();
+				}
+			}
+			
+			private function groupByTimeRecursive(startingImage:ImageDataObject):void
+			{
+				// Get the first image in the array
+				var camera:CameraDataObject;
+				var image:ImageDataObject;
+				var folder:Array = [];
+				var firstTime:Number = startingImage.timeMilliseconds;
+				
+				for(var i:int = 0; i < this.allImages.length; i++)
+				{
+					image = this.allImages.getItemAt(i) as ImageDataObject;
+					
+					if(!this.sortedImages.contains(image))
+					{
+						if(image.timeMilliseconds < (firstTime + 1000 * this.intervalStepper.value))
+						{
+							folder.push(image);
+							this.sortedImages.addItem(image);
+							this.nameFolderAndImage(image, this.outputFolders.length, folder.length - 1);
+						}
+						else
+						{
+							break;
+						}
+					}
+				}
+				
+				if(folder.length > 0)
+				{
+					this.outputFolders.push(folder);
+				}
+				
+				if(this.outputFolders.length < this.allImages.length && this.sortedImages.length < this.allImages.length)
+				{
+					this.groupByTimeRecursive(this.allImages.getItemAt(i+1) as ImageDataObject);
+				}
+			}
+			
+			private function nameFolderAndImage(image:ImageDataObject, folderNumber:int, imageNumber:int):void
+			{
+				var outputFolderConvention:String;// = StringUtil.trim(this.outputFolderNamingConvention.text);
+				var imageStartingNumber:Number = Number(StringUtil.trim(this.imageStartingNumber.text));
+				var folderStartingNumber:Number = Number(StringUtil.trim(this.folderStartingNumber.text));
+				
+				if(StringUtil.trim(this.outputFolderNamingConvention.text) == null || StringUtil.trim(this.outputFolderNamingConvention.text) == '')
+				{
+					outputFolderConvention = '';
+				}
+				else
+				{
+					outputFolderConvention = StringUtil.trim(this.outputFolderNamingConvention.text);
+				}
+				
+				if(isNaN(imageStartingNumber))
+				{
+					imageStartingNumber = 1;
+				}
+				
+				if(isNaN(folderStartingNumber))
+				{
+					folderStartingNumber = 1;
+				}
+				
+				image.outputFolderName = outputFolderConvention;
+				
+				if(image.outputFolderName.indexOf('%STARTING_NUMBER%') > -1)
+				{
+					image.outputFolderName = outputFolderConvention.replace('%STARTING_NUMBER%', String(folderNumber));
+				}
+				else
+				{
+					image.outputFolderName = outputFolderConvention + String(folderNumber + folderStartingNumber);
+				}
+				
+				if(image.outputImageName.indexOf('%STARTING_NUMBER%') > -1)
+				{
+					image.outputImageName = image.outputImageName.replace('%STARTING_NUMBER%', String(imageStartingNumber + imageNumber));
+				}
+				else
+				{
+					image.outputImageName = image.outputImageName + String(imageStartingNumber + imageNumber);
+				}
+			}
+			
+			private function doesFolderContainImageFromCamera(folder:Array, camera:CameraDataObject):Boolean
+			{
+				var containsImageFromCamera:Boolean = false;
+				var image:ImageDataObject;
+				
+				for(var i:int = 0; i < folder.length; i++)
+				{
+					image = folder[i] as ImageDataObject;
+					
+					if(image.cameraNumber == camera.cameraNumber)
+					{
+						containsImageFromCamera = true;
+						break;
+					}
+				}
+				
+				return containsImageFromCamera;
+			}
+			
+			private function saveSortedFiles():void
+			{
+				var image:ImageDataObject;
+				
+				for(var i:int = 0; i < this.allImages.length; i++)
+				{
+					image = this.allImages.getItemAt(i) as ImageDataObject;
+					image.outputImageName += '.jpg';
+					image.file.copyTo(this.saveLocation.resolvePath(image.outputFolderName + '/' + image.outputImageName));
+				}
+				
+				Alert.show('Done!', '');
+				this.resetApplicationData();
+			}
+			
+			private function resetApplicationData():void
+			{
+				this.allImages = new ArrayCollection();
+				this.sortedImages = new ArrayCollection();
+				this.outputFolders = [];
+				this.outputFolderNamingConvention.text = '';
+				this.imageNamingConvention.text = '';
+				this.numIterations = 0;
+				this.imagesText = '';
+				this.foundImages = [];
+				this.currentFileIndex = 0;
+				this.cameras = new ArrayCollection();
+				this.currentCameraObject = null;
+				this.progressBar.setProgress(0,0);
+				this.progressBar.label = '';
+				this.progressBar.visible = false;
+			}
+			
+			private function printOutput():void
+			{
+				var image:ImageDataObject;
+				var camera:CameraDataObject;
+				
+				for(var i:int = 0; i < this.cameras.length; i++)
+				{
+					camera = this.cameras.getItemAt(i) as CameraDataObject;
+					
+					for(var j:int = 0; j < camera.images.length; j++)
+					{
+						image = this.allImages.getItemAt(j) as ImageDataObject;
+						this.imagesText += '\n' + image.file.name + ', ' + image.timeMilliseconds;
+						this.imagesText += '\n' + image.outputImageName;
+						this.imagesText += '\n' + image.outputFolderName;
+					}
+				}
+			}
+			
+			private function handleErrors(error:Error):void
+			{
+				Alert.show('One or more of these files has missing exif data.  Please close FileGrouper and try again.', 'Uh oh!');
+			}
+			
+		]]>
+	</mx:Script>
+	
+	<mx:Label id="step1Label"
+		fontWeight="bold"
+		fontSize="16"
+		text="Step 1: Select Cameras"/>
+	
+	<mx:HBox
+		width="100%">
+		<mx:Button id="addCameraButton"
+			label="Add Single Camera"
+			click="{this.getImages(event)}"/>
+		<mx:Button id="addMultipleCamerasButton"
+			label="Select Directory Containing Multiple Cameras"
+			click="{this.getImagesInMultipleCameras(event)}"/>
+		
+	</mx:HBox>
+	
+	<mx:Text id="camerasListText"
+		text="{this.camerasListTextString}"/>
+	
+	<mx:List id="camerasList"
+		width="100%"
+		dataProvider="{this.cameras}"
+		dragMoveEnabled="true"
+		dragEnabled="true"
+		dropEnabled="true"
+		itemRenderer="com.tbroth.CameraItemRenderer"/>
+	
+	
+	
+	<mx:Spacer height="10"/>
+	<mx:HRule 
+		strokeColor="white"
+		strokeWidth="1"
+		width="100%"/>
+	<mx:Spacer height="10"/>
+	
+	
+	<mx:Label id="step2Label"
+		fontWeight="bold"
+		fontSize="16"
+		text="Step 2: Select Sorting Options"/>
+	
+	<mx:VBox id="step2Box"
+		width="100%">
+		<mx:FormItem id="intervalFormItem"
+			label="Tolerance / Interval in Seconds:"
+			toolTip="Specify the number of seconds by which to group images.">
+			
+			<mx:NumericStepper id="intervalStepper"
+				maxChars="4"
+				maximum="1000"
+				minimum="0"
+				stepSize="1"
+				value="1.0"
+				color="black"/>
+			
+		</mx:FormItem>
+		
+		<!--<mx:FormItem id="exifDataItem"
+			visible="false"
+			height="0"
+			label="Use exif timestamp if available:"
+			toolTip="Check this box to use the exif tag of DateTimeOriginal when filtering.  DateTimeOriginal is the time that the original image data was generated in the camera.  Checking this box will make the sorting take longer.  The DateTimeOriginal will only be used if it is available.  If you don't check this or it is not available, the creation data property of the file that your operating system uses will be used.">
+			
+			<mx:CheckBox id="useExifCB"
+				selected="true"/>
+			
+		</mx:FormItem>-->
+		
+		<mx:FormItem id="limitResultsItem"
+			label="Limit images per folder to one image from each camera:"
+			toolTip="Check this box to limit the images in each folder to one per camera.  If left unchecked, the grouping priority will go to the tolerance / interval.  For example: if you have a 10s tolerance, each output folder will contain all images taken within 10s of the first image in the folder regardless of which camera took them.">
+			
+			<mx:CheckBox id="limitResultsCB"
+				selected="true"/>
+			
+		</mx:FormItem>
+		
+		<mx:Button id="saveLocationButton"
+			label="Choose Output Location"
+			toolTip="Select a folder where you want your sorted images to be saved"
+			click="{this.handleSaveLocationButtonCicked()}"/>
+		
+		<mx:Label id="selectedSaveLocationPath"
+			text="Selected Save Location:"/>
+	</mx:VBox>
+	
+	
+	
+	
+	<mx:Spacer height="10"/>
+	<mx:HRule 
+		strokeColor="white"
+		strokeWidth="1"
+		width="100%"/>
+	<mx:Spacer height="10"/>
+	
+	<mx:Label id="step3Label"
+		fontWeight="bold"
+		fontSize="16"
+		text="Step 3: Choose Output Folder Naming Convention"/>
+	
+	<mx:VBox id="step3Box"
+		width="100%">
+		<mx:HBox
+			width="100%">
+			<mx:TextInput id="outputFolderNamingConvention"
+				color="black"
+				width="80%"/>
+			
+			<mx:TextInput id="folderStartingNumber"
+				color="black"
+				restrict="0-9"
+				text="Enter a %STARTING_NUMBER%"
+				focusIn="{this.handleStartingNumberClicked(event)}"
+				width="20%"/>
+		</mx:HBox>
+		
+		<mx:Text id="outputFolderNamingExplanation"
+			width="90%"
+			text="{this.outputFolderNamingExplanationText}"/>
+	</mx:VBox>
+	
+	<mx:Spacer height="10"/>
+	<mx:HRule 
+		strokeColor="white"
+		strokeWidth="1"
+		width="100%"/>
+	<mx:Spacer height="10"/>
+	
+	<mx:Label id="step4Label"
+		fontWeight="bold"
+		fontSize="16"
+		text="Step 4: Select Output Image Naming Convention"/>
+	
+	<mx:VBox id="step4Box"
+		width="100%">
+		<mx:HBox
+			width="100%">
+			<mx:TextInput id="imageNamingConvention"
+				color="black"
+				width="80%"/>
+			
+			<mx:TextInput id="imageStartingNumber"
+				color="black"
+				restrict="0-9"
+				text="Enter a %STARTING_NUMBER%"
+				focusIn="{this.handleStartingNumberClicked(event)}"
+				width="20%"/>
+		</mx:HBox>
+		
+		<mx:Text id="imageNamingExplanation"
+			width="90%"
+			text="{this.imageNamingExplanationText}"/>
+	</mx:VBox>
+		
+	<mx:Spacer height="10"/>
+	<mx:HRule 
+		strokeColor="white"
+		strokeWidth="1"
+		width="100%"/>
+	<mx:Spacer height="10"/>
+	
+	<mx:Label id="step5Label"
+		fontWeight="bold"
+		fontSize="16"
+		text="Step 5: Begin Processing"/>
+	
+	<mx:Button id="processImagesButton"
+		label="Start Sorting Images!"
+		click="{this.handleProcessImagesButtonClicked()}"/>
+	
+	<mx:ProgressBar id="progressBar"
+		indeterminate="false"
+		mode="manual"
+		visible="false"
+		label=""/>
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	<mx:FormItem id="exifDataItem"
+		visible="false"
+		height="0"
+		label="Use exif timestamp if available:"
+		toolTip="Check this box to use the exif tag of DateTimeOriginal when filtering.  DateTimeOriginal is the time that the original image data was generated in the camera.  Checking this box will make the sorting take longer.  The DateTimeOriginal will only be used if it is available.  If you don't check this or it is not available, the creation data property of the file that your operating system uses will be used.">
+		
+		<mx:CheckBox id="useExifCB"
+			selected="true"/>
+		
+	</mx:FormItem>
+	
+	
+	<!--<mx:Label id="numIterationsLabel"
+		text="{this.numIterations}"
+		visible="false"/>
+	
+	<mx:Text id="imagesTextArea"
+		text="{this.imagesText}"
+		visible="true"/>-->
+	
+</mx:WindowedApplication>
